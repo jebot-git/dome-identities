@@ -39,7 +39,7 @@ class DesktopMenu {
   std::unique_ptr<Impl> impl;
 
 public:
-  DesktopMenu(Fl_Window &, DesktopMenuBar &);
+  DesktopMenu(Fl_Window &, DesktopMenuBar &, bool associateWindow = true);
   ~DesktopMenu();
   std::string objectPath() const;
   std::string serviceName() const;

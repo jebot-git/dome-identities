@@ -63,18 +63,18 @@ Json keyRows(const std::string &program) {
 }
 class Manager : public dx::GpuWindow {
   DesktopMenuBar menu{0, 0, 1100, 30};
-  Fl_Choice kind{150, 45, 365, 34, "Identity store:"};
-  Fl_Box location{20, 90, 1050, 40};
-  Fl_Hold_Browser rows{20, 145, 430, 390};
-  Fl_Text_Display details{470, 145, 610, 390};
+  Fl_Choice kind{150, 15, 365, 34, "Identity store:"};
+  Fl_Box location{20, 60, 1050, 40};
+  Fl_Hold_Browser rows{20, 115, 430, 390};
+  Fl_Text_Display details{470, 115, 610, 390};
   Fl_Text_Buffer detailBuffer;
-  Fl_Button refresh{20, 555, 120, 34, "Refresh"},
-      import{155, 555, 130, 34, "Import..."},
-      create{300, 555, 150, 34, "Create..."};
-  Fl_Button publicExport{470, 555, 185, 34, "Export public..."},
-      secretExport{670, 555, 190, 34, "Export secret..."},
-      remove{875, 555, 205, 34, "Remove..."};
-  Fl_Box status{20, 610, 1060, 45};
+  Fl_Button refresh{20, 525, 120, 34, "Refresh"},
+      import{155, 525, 130, 34, "Import..."},
+      create{300, 525, 150, 34, "Create..."};
+  Fl_Button publicExport{470, 525, 185, 34, "Export public..."},
+      secretExport{670, 525, 190, 34, "Export secret..."},
+      remove{875, 525, 205, 34, "Remove..."};
+  Fl_Box status{20, 580, 1060, 45};
   std::unique_ptr<DesktopMenu> desktop;
   std::unique_ptr<StatusIcon> tray;
   Json records = Json::array();
@@ -107,12 +107,22 @@ class Manager : public dx::GpuWindow {
       return identities::list(catalog, true).at("certificates");
     return keyRows(store == 3 ? "gpgsm" : "gpg");
   }
+  void updateCommands() {
+    for (const char *name : {"Import...", "Refresh", "Export public...",
+                             "Remove...", "Quit"})
+      menu.mode(menu.find_index(name), busy ? FL_MENU_INACTIVE : 0);
+    menu.mode(menu.find_index("Create..."),
+              busy || kind.value() == 1 || kind.value() == 3 ? FL_MENU_INACTIVE : 0);
+    menu.mode(menu.find_index("Export secret..."),
+              busy || kind.value() == 1 ? FL_MENU_INACTIVE : 0);
+  }
   void execute(std::function<void()> action = {}) {
     if (busy) {
       say("Finish the current identity operation first.");
       return;
     }
     busy = true;
+    updateCommands();
     kind.deactivate();
     int store = kind.value();
     say("Working... GnuPG may open its passphrase dialog for an action you "
@@ -135,6 +145,7 @@ class Manager : public dx::GpuWindow {
       });
     } catch (const std::exception &) {
       busy = false;
+      updateCommands();
       kind.activate();
       say("Cannot start the identity worker.");
     }
@@ -256,6 +267,7 @@ class Manager : public dx::GpuWindow {
       });
   }
   void exportIdentity(bool secret) {
+    if (secret && kind.value() == 1) return;
     if (busy)
       return;
     try {
@@ -336,6 +348,10 @@ class Manager : public dx::GpuWindow {
 
 public:
   bool exitRequested = false;
+  int handle(int event) override {
+    if (event == FL_SHORTCUT && menu.test_shortcut()) return 1;
+    return dx::GpuWindow::handle(event);
+  }
   void poll() {
     std::unique_ptr<Result> result;
     {
@@ -347,6 +363,7 @@ public:
     if (worker.joinable())
       worker.join();
     busy = false;
+    updateCommands();
     kind.activate();
     if (!result->error.empty()) {
       say(result->error);
@@ -362,7 +379,7 @@ public:
     say("Ready. Identity use and key changes require an explicit action.");
   }
   bool trayAvailable() const { return tray && tray->available(); }
-  Manager() : dx::GpuWindow(1100, 680, "Dome Identities") {
+  Manager() : dx::GpuWindow(1100, 650, "Dome Identities") {
     xclass("org.domed.Identities");
     kind.add("Shared PEM identities|Public PEM certificates|OpenPGP "
              "(GnuPG)|S/MIME certificates (gpgsm)");
@@ -407,26 +424,29 @@ public:
         },
         this);
     menu.add(
-        "File/Show identities", FL_CTRL | 'o',
+        "Show identities", FL_CTRL | 'o',
         [](Fl_Widget *, void *p) { static_cast<Manager *>(p)->show(); }, this);
     menu.add(
-        "File/Import...", FL_CTRL | 'i',
+        "Import...", FL_CTRL | 'i',
         [](Fl_Widget *, void *p) {
           static_cast<Manager *>(p)->importIdentity();
         },
         this);
     menu.add(
-        "File/Create...", FL_CTRL | 'n',
+        "Create...", FL_CTRL | 'n',
         [](Fl_Widget *, void *p) {
           static_cast<Manager *>(p)->createIdentity();
         },
         this);
     menu.add(
-        "File/Refresh", FL_F + 5,
+        "Refresh", FL_F + 5,
         [](Fl_Widget *, void *p) { static_cast<Manager *>(p)->execute(); },
         this);
+    menu.add("Export public...", 0, [](Fl_Widget *, void *p) { static_cast<Manager *>(p)->exportIdentity(false); }, this);
+    menu.add("Export secret...", 0, [](Fl_Widget *, void *p) { static_cast<Manager *>(p)->exportIdentity(true); }, this);
+    menu.add("Remove...", 0, [](Fl_Widget *, void *p) { static_cast<Manager *>(p)->removeIdentity(); }, this);
     menu.add(
-        "File/Close to tray", FL_CTRL | 'w',
+        "Close to tray", FL_META | 'w',
         [](Fl_Widget *, void *p) {
           auto s = static_cast<Manager *>(p);
           if (s->tray && s->tray->available())
@@ -436,11 +456,11 @@ public:
         },
         this);
     menu.add(
-        "File/Quit", FL_CTRL | 'q',
+        "Quit", FL_META | 'q',
         [](Fl_Widget *, void *p) { static_cast<Manager *>(p)->quit(); }, this);
     end();
     resizable(details);
-    size_range(1000, 650);
+    size_range(1000, 620);
     callback(
         [](Fl_Widget *, void *p) {
           auto s = static_cast<Manager *>(p);
@@ -450,7 +470,10 @@ public:
             s->quit();
         },
         this);
-    desktop = std::make_unique<DesktopMenu>(*this, menu);
+    // Tray ownership supplies the command menu; the identity window has only
+    // its native controls and shortcuts, with no separate File/menu bar.
+    menu.hide();
+    desktop = std::make_unique<DesktopMenu>(*this, menu, false);
     tray = std::make_unique<StatusIcon>(*desktop);
     tray->setTitle("Dome Identities");
     tray->activate = [this] { show(); };

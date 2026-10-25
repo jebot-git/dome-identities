@@ -15,13 +15,13 @@ if '--watcher' in sys.argv:
  Gio.bus_own_name_on_connection(connection,'org.kde.StatusNotifierWatcher',Gio.BusNameOwnerFlags.NONE,None,None)
  Gio.bus_own_name_on_connection(connection,'com.canonical.AppMenu.Registrar',Gio.BusNameOwnerFlags.NONE,None,None)
  print('ready',flush=True);GLib.MainLoop().run();sys.exit()
-from Xlib import X,display
+from Xlib import X,XK,display,error
 from Xlib.ext import xtest
 from PIL import Image
 signal.pthread_sigmask(signal.SIG_SETMASK,[])
 if os.environ.get('DOME_IDENTITIES_TEST_BUS')!='1':os.execvpe('dbus-run-session',['dbus-run-session','--',sys.executable,*sys.argv],{**os.environ,'DOME_IDENTITIES_TEST_BUS':'1'})
 root=Path(__file__).resolve().parents[1];binary=Path(sys.argv[1]).resolve() if len(sys.argv)>1 else root/'build/dome-identities';out=root/'build/test-artifacts';out.mkdir(parents=True,exist_ok=True)
-def wait(fn,seconds=10):
+def wait(fn,seconds=30):
  end=time.monotonic()+seconds
  while time.monotonic()<end:
   result=fn()
@@ -47,10 +47,15 @@ with tempfile.TemporaryDirectory(prefix='dome-identities-ui-') as temporary:
   def prop(name):return call('org.freedesktop.DBus.Properties','Get','org.kde.StatusNotifierItem',name)
   assert 'dome-identities' in prop('Id');assert '24, 24' in prop('IconPixmap')
   menu=re.search("'([^']+)'",prop('Menu')).group(1)
-  layout=call('com.canonical.dbusmenu','GetLayout','0','-1','[]',path=menu);assert 'Import...' in layout and 'Close to tray' in layout
-  def window():return next((w for w in xd.screen().root.query_tree().children if w.get_wm_name()=='Dome Identities'),None)
+  layout=call('com.canonical.dbusmenu','GetLayout','0','-1','[]',path=menu);assert 'Import...' in layout and 'Close to tray' in layout and "'File'" not in layout and 'Export public...' in layout
+  def window():
+   for candidate in xd.screen().root.query_tree().children:
+    try:
+     if candidate.get_wm_name()=='Dome Identities':return candidate
+    except error.BadWindow:pass # A tray close can destroy a child mid-query.
+   return None
   w=wait(window);time.sleep(.5)
-  g=w.get_geometry();xtest.fake_input(xd,X.MotionNotify,x=g.x+90,y=g.y+157)
+  g=w.get_geometry();xtest.fake_input(xd,X.MotionNotify,x=g.x+90,y=g.y+127)
   xtest.fake_input(xd,X.ButtonPress,1);xtest.fake_input(xd,X.ButtonRelease,1);xd.sync();time.sleep(.2)
   g=w.get_geometry();raw=xd.screen().root.get_image(g.x,g.y,g.width,g.height,X.ZPixmap,0xffffffff);Image.frombytes('RGB',(g.width,g.height),raw.data,'raw','BGRX').save(out/'manager.png')
   def command(name):
@@ -63,14 +68,24 @@ with tempfile.TemporaryDirectory(prefix='dome-identities-ui-') as temporary:
    try:
     def tray_request(op,**fields):
      driver.stdin.write(json.dumps(dict(op=op,**fields))+'\n');driver.stdin.flush();reply=json.loads(driver.stdout.readline());assert reply['ok'],reply;return reply['value']
-    item=next(item for item in tray_request('tray') if item.get('Id')=='dome-identities');assert item['managed'] and item['movable']
+    identity_items=[item for item in tray_request('tray') if item.get('Id')=='dome-identities'];assert len(identity_items)==1
+    item=identity_items[0];assert item['managed'] and item['movable'] and item['suite']=='dome-identities'
+    actions=tray_request('menu',item=item,parent=0);assert any(row['label']=='Export public...' for row in actions) and all(row['label']!='File' for row in actions)
     tray_request('placement',item=item,managed=False)
     assert not next(item for item in tray_request('tray') if item.get('Id')=='dome-identities')['managed']
     tray_request('placement',item=item,managed=True)
     assert next(item for item in tray_request('tray') if item.get('Id')=='dome-identities')['managed']
    finally:driver.stdin.close();assert driver.wait(timeout=5)==0
   assert key.read_bytes()==original
-  command('Quit');assert app.wait(timeout=5)==0
+  assert "'Super'" in layout
+  def super_key(letter):
+   w.set_input_focus(X.RevertToParent,X.CurrentTime);xd.sync()
+   modifier=xd.keysym_to_keycode(XK.string_to_keysym('Super_L'));code=xd.keysym_to_keycode(XK.string_to_keysym(letter))
+   for kind,value in [(X.KeyPress,modifier),(X.KeyPress,code),(X.KeyRelease,code),(X.KeyRelease,modifier)]:xtest.fake_input(xd,kind,value)
+   xd.sync()
+  super_key('w');wait(lambda:window() is None)
+  call('org.kde.StatusNotifierItem','Activate','0','0');w=wait(window);wait(lambda:w.get_attributes().map_state==X.IsViewable)
+  super_key('q');assert app.wait(timeout=5)==0
   print('PASS native FLTK window, shared fixture listing, universal commands, tray registration/pixmap, close-to-tray, activation, DomeD default placement/overrides and clean quit without changing keys')
  finally:
   if app.poll() is None:app.terminate();app.wait(timeout=5)

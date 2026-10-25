@@ -1,5 +1,6 @@
 [Desktop Entry]
 Type=Application
+NoDisplay=true
 Name=Dome Identities
 Comment=Manage shared PEM, OpenPGP and S/MIME identities
 Exec=dome-identities

@@ -5,13 +5,16 @@ identities, OpenPGP through `gpg`, and S/MIME certificates through `gpgsm` in on
 window. GnuPG engines remain the owners of their keyrings. PEM imports keep their
 existing file paths; generated PEM keys stay in the private shared directory.
 
-The tray icon registers with DomeD's StatusNotifier watcher and exports the
-same actions as the universal menu. Closing the window keeps it in the tray
-when a watcher is available; File > Quit exits. `--tray` starts hidden and shows
-the window if no tray watcher appears. The interface follows DomeD's live
-appearance, Unicode BDF font and bitmap scale, and uses FLTK's GPU window.
-Wayland appmenu integration is enabled by default. X11 appmenu association is an
-explicit `-DDOME_IDENTITIES_ENABLE_X11=ON` build option.
+DomeD's Tray Applications suite owns the command menu. The identity window
+contains native controls without a separate File menu, and its desktop metadata
+uses `NoDisplay=true` to keep it out of the normal application launcher. The
+suite can open the manager on demand and forwards its flat action menu once it
+is running. Closing the window keeps it in the tray when a watcher is available;
+**Super+W** closes the window and **Super+Q** quits the application. `--tray`
+starts hidden and shows the window if no watcher appears. The interface follows
+DomeD's live appearance, Unicode BDF font and bitmap scale, and uses FLTK's GPU
+window. Wayland is the default; X11 support is an explicit
+`-DDOME_IDENTITIES_ENABLE_X11=ON` build option.
 
 ## Build and verify
 
@@ -32,7 +35,8 @@ The core fixture uses disposable catalog and GnuPG directories, an empty test
 passphrase and a disabled pinentry. UI QA starts a private Xvfb display and
 D-Bus watcher. Native Wayland QA uses a separate nested DomeD compositor,
 private runtime directory, fixture keys and disabled session services; it checks
-surface/menu association, native prompts, tray restoration and worker shutdown.
+tray-owned flat commands, popup retention when the pointer leaves, native
+prompts, tray restoration and worker shutdown.
 These tests read no user identities and change no user keyrings.
 `tests/ui.py` needs Python Xlib, Pillow and PyGObject, plus Xvfb and a session bus.
 OpenSSL 3, FLTK 1.4.5, GIO, Fontconfig and a C++17 compiler are build dependencies.

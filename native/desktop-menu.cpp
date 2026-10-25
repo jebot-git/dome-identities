@@ -60,6 +60,7 @@ struct DesktopMenu::Impl {
   guint registration = 0;
   guint registrarWatch = 0;
   bool registrarAvailable = false;
+  bool associateWindow = true;
   uint32_t revision = 1;
   std::string path, signature;
   const Fl_Menu_Item *menuStorage = nullptr;
@@ -71,7 +72,7 @@ struct DesktopMenu::Impl {
   wl_surface *attachedSurface = nullptr;
   unsigned long attachedXid = 0;
   int nextId = 1;
-  Impl(Fl_Window &w, DesktopMenuBar &m) : window(w), menu(m) {
+  Impl(Fl_Window &w, DesktopMenuBar &m, bool associate) : window(w), menu(m), associateWindow(associate) {
     static int count = 0;
     path = "/org/de_xr/FLTK/Menu" + std::to_string(++count);
     GError *error = nullptr;
@@ -135,6 +136,7 @@ struct DesktopMenu::Impl {
     Fl::repeat_timeout(.1, tick, p);
   }
   void updateVisibility() {
+    if (!associateWindow) { menu.hide(); return; }
     // A desktop name alone is insufficient: a working menu host and window
     // association must be present before the local commands leave the window.
     bool exported =
@@ -142,6 +144,7 @@ struct DesktopMenu::Impl {
     menu.setUniversal(dx::dome() && registrarAvailable && exported);
   }
   void attach() {
+    if (!associateWindow) return;
     if (!window.shown()) {
       if (surface) {
         org_kde_kwin_appmenu_release(surface);
@@ -479,8 +482,8 @@ struct DesktopMenu::Impl {
           "Unknown menu method");
   }
 };
-DesktopMenu::DesktopMenu(Fl_Window &w, DesktopMenuBar &m)
-    : impl(std::make_unique<Impl>(w, m)) {}
+DesktopMenu::DesktopMenu(Fl_Window &w, DesktopMenuBar &m, bool associate)
+    : impl(std::make_unique<Impl>(w, m, associate)) {}
 DesktopMenu::~DesktopMenu() = default;
 
 std::string DesktopMenu::objectPath() const { return impl->path; }
