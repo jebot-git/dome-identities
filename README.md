@@ -66,6 +66,21 @@ reader. Names must be valid UTF-8, nonblank and free of Unicode control
 characters, within 256 bytes. Generic Gemini certificates
 can be imported too.
 
+To reuse an identity already held by Penguin Mail, select **Import from Penguin
+Mail...** in the window or its tray actions. The chooser loads the default
+`$XDG_DATA_HOME/penguin-mail/misfin/state.json` (or the corresponding
+`~/.local/share` path); Browse can select a different private store. Choose an
+identity and its shared display name, then select **Import identity**. Listing
+shows only certificate addresses and fingerprints. Import validates the chosen
+certificate, fingerprint and matching key again before publishing it.
+
+Penguin Mail stores PEM data inside its private JSON file. This explicit import
+copies only the selected certificate and key into the manager's mode-0700
+fingerprint directory with mode-0600 files; the shared catalog stores their
+paths. Penguin Mail's store remains unchanged. An identity already available in
+the shared catalog keeps its existing paths and display name. Removing a shared
+reference preserves its PEM files, which can be reused by a later import.
+
 Create asks for a name of up to 64 Unicode characters and a mailbox at a DNS
 hostname. International DNS names are converted to ASCII IDNA form; mailbox
 names use ASCII letters, digits and `._+-`. Numeric IP address forms are refused. It makes a five-year
@@ -94,6 +109,8 @@ fingerprints. The engines use `GNUPGHOME` when set, otherwise the usual GnuPG
 home. Import accepts a selected public or secret key file; S/MIME also accepts a
 PKCS#12 identity. OpenPGP Create asks for a user ID and delegates passphrase
 creation to GnuPG's pinentry. S/MIME identities are imported rather than created.
+The identity-store selector has four flat choices; **S/MIME certificates
+(gpgsm)** is one selectable item.
 
 Export public writes an armored public key/certificate to a new file. Export
 secret requires a separate confirmation and writes a mode-0600 file. S/MIME

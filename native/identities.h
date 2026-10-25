@@ -8,6 +8,10 @@ namespace identities {
 namespace fs = std::filesystem;
 using Json = nlohmann::json;
 fs::path catalogPath();
+fs::path penguinStorePath();
+Json penguinIdentities(const fs::path &store);
+Json importPenguinIdentity(const fs::path &catalog, const fs::path &store,
+                           const std::string &id, const std::string &name);
 Json inspect(const fs::path &certificate, const fs::path &key = {});
 Json list(const fs::path &catalog, bool publicOnly = false);
 Json adopt(const fs::path &catalog, const std::string &name,

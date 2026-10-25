@@ -200,8 +200,10 @@ fs::path catalogPath() {
   return base / "de-xr/identities/index.json";
 }
 
-Json inspect(const fs::path &path, const fs::path &key) {
-  auto cert = certificate(read(path, false, 65536, !key.empty()));
+static Json inspectPem(const std::string &pem, const std::string &key = {}) {
+  require(pem.size() <= 65536 && key.size() <= 65536,
+          "Identity exceeds 64 KiB");
+  auto cert = certificate(pem);
   std::string address;
   int index = X509_NAME_get_index_by_NID(X509_get_subject_name(cert.get()),
                                          NID_userId, -1);
@@ -232,9 +234,8 @@ Json inspect(const fs::path &path, const fs::path &key) {
     }
   }
   if (!key.empty()) {
-    auto bytes = read(key, true);
     Ossl<BIO, BIO_free_all> bio(
-        BIO_new_mem_buf(bytes.data(), int(bytes.size())), BIO_free_all);
+        BIO_new_mem_buf(key.data(), int(key.size())), BIO_free_all);
     Ossl<EVP_PKEY, EVP_PKEY_free> privateKey(
         PEM_read_bio_PrivateKey(
             bio.get(), nullptr, [](char *, int, int, void *) { return 0; },
@@ -254,6 +255,118 @@ Json inspect(const fs::path &path, const fs::path &key) {
       {"details", bioText(details.get())},
       {"valid", X509_cmp_current_time(X509_get0_notBefore(cert.get())) < 0 &&
                     X509_cmp_current_time(X509_get0_notAfter(cert.get())) > 0}};
+}
+Json inspect(const fs::path &path, const fs::path &key) {
+  return inspectPem(read(path, false, 65536, !key.empty()),
+                    key.empty() ? std::string() : read(key, true));
+}
+
+fs::path penguinStorePath() {
+  return catalogPath().parent_path().parent_path().parent_path() /
+         "penguin-mail/misfin/state.json";
+}
+static Json penguinRecords(const fs::path &store) {
+  require(store.is_absolute(), "Choose an absolute Penguin Mail store path");
+  struct stat st{};
+  if (lstat(store.c_str(), &st) && errno == ENOENT)
+    return Json::array();
+  auto bytes = read(store, true, 8 * 1024 * 1024);
+  try {
+    auto document = Json::parse(bytes);
+    const auto &entries = document.at("identities");
+    require(entries.is_array() && entries.size() <= 16,
+            "Invalid Penguin Mail identity list");
+    std::set<std::string> ids;
+    for (const auto &entry : entries) {
+      auto id = entry.at("id").get<std::string>();
+      require(id.size() == 64 &&
+                  id.find_first_not_of("0123456789abcdef") == std::string::npos &&
+                  ids.insert(id).second && entry.at("certificate").is_string() &&
+                  entry.at("key").is_string() &&
+                  entry.at("certificate").get_ref<const std::string &>().size() <= 65536 &&
+                  entry.at("key").get_ref<const std::string &>().size() <= 65536,
+              "Invalid Penguin Mail identity record");
+    }
+    return entries;
+  } catch (const Json::exception &) {
+    // JSON diagnostics can quote input from a store containing private keys.
+    throw std::runtime_error("Invalid Penguin Mail identity store");
+  }
+}
+Json penguinIdentities(const fs::path &store) {
+  Json available = Json::array();
+  for (const auto &entry : penguinRecords(store)) {
+    try {
+      auto checked = inspectPem(entry.at("certificate"));
+      auto address = checked.at("address").get<std::string>();
+      if (checked.at("id") != entry.at("id") || !checked.at("valid").get<bool>() ||
+          address.empty() || address.size() > 320 || !validText(address))
+        continue;
+      available.push_back({{"id", entry.at("id")}, {"address", address}});
+    } catch (const std::exception &) {
+      // Listing needs public metadata only; unusable certificates are omitted.
+    }
+  }
+  return available;
+}
+Json importPenguinIdentity(const fs::path &catalog, const fs::path &store,
+                           const std::string &id, const std::string &name) {
+  validName(name);
+  require(catalog.is_absolute(), "Choose an absolute shared catalog path");
+  auto entries = penguinRecords(store);
+  auto selected = std::find_if(entries.begin(), entries.end(),
+                               [&](const Json &entry) { return entry.at("id") == id; });
+  require(selected != entries.end(), "Choose an available Penguin Mail identity");
+  const auto &pem = selected->at("certificate").get_ref<const std::string &>();
+  const auto &key = selected->at("key").get_ref<const std::string &>();
+  require(!key.empty(), "The selected Penguin Mail identity has no private key");
+  auto checked = inspectPem(pem, key);
+  auto address = checked.at("address").get<std::string>();
+  require(checked.at("id") == id && checked.at("valid").get<bool>() &&
+              !address.empty() && address.size() <= 320 && validText(address),
+          "The selected Penguin Mail identity is unavailable or has changed");
+  Lock lock(catalog.parent_path());
+  auto document = list(catalog);
+  for (const auto &existing : document["identities"])
+    if (existing.at("id") == id) {
+      auto current = inspect(existing.at("certificate").get<std::string>(),
+                             existing.at("key").get<std::string>());
+      require(current.at("id") == id && current.at("valid").get<bool>(),
+              "Repair or remove the existing shared identity reference first");
+      return existing; // Keep any existing PEM paths and user-assigned name.
+    }
+  require(document["identities"].size() < 256,
+          "At most 256 entries can be stored in one catalog");
+  auto directory = catalog.parent_path() / id;
+  bool created = mkdir(directory.c_str(), 0700) == 0;
+  if (!created) {
+    struct stat st{};
+    require(errno == EEXIST && lstat(directory.c_str(), &st) == 0 &&
+                S_ISDIR(st.st_mode) && st.st_uid == geteuid() && !(st.st_mode & 0077),
+            "Cannot use a private shared identity directory");
+  }
+  auto certificatePath = directory / "certificate.pem", keyPath = directory / "key.pem";
+  bool published = false;
+  try {
+    if (created) {
+      writeNew(keyPath, key);
+      writeNew(certificatePath, pem);
+    } else {
+      auto current = inspect(certificatePath, keyPath);
+      require(current.at("id") == id && current.at("valid").get<bool>(),
+              "An existing shared PEM pair does not match the selected identity");
+    }
+    Json record = {{"id", id}, {"name", name}, {"address", address},
+                   {"certificate", certificatePath.string()}, {"key", keyPath.string()}};
+    document["identities"].push_back(record);
+    save(catalog, document, &published);
+    return record;
+  } catch (...) {
+    if (created && !published) {
+      unlink(keyPath.c_str()); unlink(certificatePath.c_str()); rmdir(directory.c_str());
+    }
+    throw;
+  }
 }
 Json list(const fs::path &catalog, bool publicOnly) {
   auto path =

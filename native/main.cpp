@@ -3,6 +3,7 @@
 #include "gpu-window.h"
 #include "identities.h"
 #include "status-icon.h"
+#include "store-choice.h"
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Tabs.H>
@@ -61,16 +62,100 @@ Json keyRows(const std::string &program) {
     records.push_back(record);
   return records;
 }
+class PenguinPicker : public dx::GpuWindow {
+  Fl_Input store{160, 20, 440, 34, "Penguin Mail store:"};
+  Fl_Button browse{615, 20, 110, 34, "Browse..."};
+  Fl_Choice choice{160, 75, 565, 34, "Identity:"};
+  Fl_Input name{160, 125, 565, 34, "Shared name:"};
+  Fl_Button reload{20, 175, 160, 34, "Load identities"};
+  Fl_Box status{200, 170, 525, 65};
+  Fl_Box help{20, 240, 705, 50,
+              "Import copies the selected certificate and key into the private "
+              "shared store.\nPenguin Mail's identity store remains unchanged."};
+  Fl_Button cancel{430, 305, 130, 34, "Cancel"},
+      accept{585, 305, 140, 34, "Import identity"};
+  Json entries = Json::array();
+  std::vector<std::string> labels;
+  std::vector<Fl_Menu_Item> items;
+  bool confirmed = false;
+  std::string feedback;
+  void say(const std::string &text) {
+    feedback = literal(text); status.copy_label(feedback.c_str()); redraw();
+  }
+  void clear() {
+    choice.clear(); items.clear(); labels.clear(); entries = Json::array();
+    name.value(""); accept.deactivate();
+  }
+  void selected() {
+    int index = choice.value();
+    if (index < 0 || size_t(index) >= entries.size()) return;
+    auto address = entries[size_t(index)].at("address").get<std::string>();
+    name.value(address.size() <= 256 ? address.c_str() : "Penguin Mail identity");
+  }
+  void load() {
+    clear();
+    try {
+      entries = identities::penguinIdentities(fs::path(store.value()));
+      labels.reserve(entries.size()); items.resize(entries.size() + 1);
+      for (size_t i = 0; i < entries.size(); ++i) {
+        labels.push_back(literal(entries[i].at("address").get<std::string>() +
+                                 "  " + entries[i].at("id").get<std::string>().substr(0, 12)));
+        items[i].label(labels.back().c_str());
+      }
+      choice.menu(items.data()); choice.value(0); selected();
+      if (entries.empty())
+        say("No available Misfin identities. Choose Penguin Mail's "
+            "misfin/state.json if it is stored elsewhere.");
+      else {
+        accept.activate();
+        say("Choose the identity to import, then select Import identity.");
+      }
+    } catch (const std::exception &error) { say(error.what()); }
+  }
+public:
+  PenguinPicker() : dx::GpuWindow(760, 360, "Import from Penguin Mail") {
+    xclass("org.domed.Identities");
+    status.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+    help.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+    store.value(identities::penguinStorePath().c_str());
+    store.when(FL_WHEN_CHANGED);
+    store.callback([](Fl_Widget *, void *data) {
+      auto self = static_cast<PenguinPicker *>(data); self->clear();
+      self->say("Select Load identities after choosing the store.");
+    }, this);
+    browse.callback([](Fl_Widget *, void *data) {
+      auto self = static_cast<PenguinPicker *>(data);
+      auto path = choose("Penguin Mail Misfin state.json");
+      if (!path.empty()) { self->store.value(path.c_str()); self->load(); }
+    }, this);
+    reload.callback([](Fl_Widget *, void *data) { static_cast<PenguinPicker *>(data)->load(); }, this);
+    choice.callback([](Fl_Widget *, void *data) { static_cast<PenguinPicker *>(data)->selected(); }, this);
+    accept.callback([](Fl_Widget *, void *data) {
+      auto self = static_cast<PenguinPicker *>(data);
+      if (self->choice.value() < 0 || size_t(self->choice.value()) >= self->entries.size()) return;
+      self->confirmed = true; self->hide();
+    }, this);
+    cancel.callback([](Fl_Widget *, void *data) { static_cast<PenguinPicker *>(data)->hide(); }, this);
+    end(); set_modal(); dx::style(this); load();
+  }
+  bool run() {
+    show(); while (shown()) Fl::wait(.05); return confirmed;
+  }
+  fs::path source() const { return store.value(); }
+  std::string id() const { return entries.at(size_t(choice.value())).at("id"); }
+  std::string displayName() const { return name.value(); }
+};
 class Manager : public dx::GpuWindow {
   DesktopMenuBar menu{0, 0, 1100, 30};
   Fl_Choice kind{150, 15, 365, 34, "Identity store:"};
   Fl_Box location{20, 60, 1050, 40};
-  Fl_Hold_Browser rows{20, 115, 430, 390};
-  Fl_Text_Display details{470, 115, 610, 390};
+  Fl_Hold_Browser rows{20, 115, 430, 350};
+  Fl_Text_Display details{470, 115, 610, 350};
   Fl_Text_Buffer detailBuffer;
-  Fl_Button refresh{20, 525, 120, 34, "Refresh"},
-      import{155, 525, 130, 34, "Import..."},
-      create{300, 525, 150, 34, "Create..."};
+  Fl_Button refresh{20, 485, 120, 34, "Refresh"},
+      import{155, 485, 130, 34, "Import file..."},
+      create{300, 485, 150, 34, "Create..."};
+  Fl_Button penguinImport{20, 525, 430, 34, "Import from Penguin Mail..."};
   Fl_Button publicExport{470, 525, 185, 34, "Export public..."},
       secretExport{670, 525, 190, 34, "Export secret..."},
       remove{875, 525, 205, 34, "Remove..."};
@@ -115,6 +200,10 @@ class Manager : public dx::GpuWindow {
               busy || kind.value() == 1 || kind.value() == 3 ? FL_MENU_INACTIVE : 0);
     menu.mode(menu.find_index("Export secret..."),
               busy || kind.value() == 1 ? FL_MENU_INACTIVE : 0);
+    bool canImportPenguin = !busy && kind.value() == 0;
+    menu.mode(menu.find_index("Import from Penguin Mail..."),
+              canImportPenguin ? 0 : FL_MENU_INACTIVE);
+    canImportPenguin ? penguinImport.activate() : penguinImport.deactivate();
   }
   void execute(std::function<void()> action = {}) {
     if (busy) {
@@ -237,6 +326,16 @@ class Manager : public dx::GpuWindow {
     } catch (const std::exception &e) {
       say(e.what());
     }
+  }
+  void importPenguin() {
+    if (busy || kind.value() != 0) return;
+    try {
+      PenguinPicker picker;
+      if (!picker.run()) return;
+      auto store = picker.source();
+      auto id = picker.id(), name = picker.displayName();
+      execute([=] { identities::importPenguinIdentity(catalog, store, id, name); });
+    } catch (const std::exception &error) { say(error.what()); }
   }
   void createIdentity() {
     if (kind.value() == 1 || kind.value() == 3) {
@@ -381,8 +480,7 @@ public:
   bool trayAvailable() const { return tray && tray->available(); }
   Manager() : dx::GpuWindow(1100, 650, "Dome Identities") {
     xclass("org.domed.Identities");
-    kind.add("Shared PEM identities|Public PEM certificates|OpenPGP "
-             "(GnuPG)|S/MIME certificates (gpgsm)");
+    dx::identityStores(kind);
     kind.value(0);
     location.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
     status.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
@@ -403,6 +501,9 @@ public:
           static_cast<Manager *>(p)->importIdentity();
         },
         this);
+    penguinImport.callback([](Fl_Widget *, void *data) {
+      static_cast<Manager *>(data)->importPenguin();
+    }, this);
     create.callback(
         [](Fl_Widget *, void *p) {
           static_cast<Manager *>(p)->createIdentity();
@@ -432,6 +533,9 @@ public:
           static_cast<Manager *>(p)->importIdentity();
         },
         this);
+    menu.add("Import from Penguin Mail...", 0, [](Fl_Widget *, void *data) {
+      static_cast<Manager *>(data)->importPenguin();
+    }, this);
     menu.add(
         "Create...", FL_CTRL | 'n',
         [](Fl_Widget *, void *p) {
